@@ -580,11 +580,10 @@ class FidelityAutomation:
         """
         try:
             # Go to the login page
-            self.page.goto(url="https://digital.fidelity.com/prgw/digital/login/full-page")
-
-            self.page.wait_for_timeout(5000)
-
-            self.page.goto(url="https://digital.fidelity.com/prgw/digital/login/full-page")
+            self.page.goto(
+                url="https://digital.fidelity.com/prgw/digital/login/full-page",
+                timeout=60000,
+            )
             
             # Login page
             self.page.get_by_label("Username", exact=True).click()
