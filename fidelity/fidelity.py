@@ -605,15 +605,14 @@ class FidelityAutomation:
             # Check to see if TOTP secret is blank or "NA"
             totp_secret = None if totp_secret == "NA" else totp_secret
 
-            # If we hit the 2fA page after trying to login
-            if "login" in self.page.url:
+            # Fidelity currently redirects the MFA flow to `/signin/retail`.
+            # Older versions used a URL containing `/login/`; accept both.
+            if "login" in self.page.url or "signin" in self.page.url:
                 self.wait_for_loading_sign()
                 widget = self.page.locator("#dom-widget div").first
                 widget.wait_for(timeout=5000, state='visible')
-                # If TOTP secret is provided, we are will use the TOTP key. See if authenticator code prompt is present
-                if (totp_secret is not None and
-                    self.page.get_by_role("heading", name="Enter the code from your").is_visible()
-                ):
+
+                def submit_authenticator_code():
                     # Get authenticator code
                     code = pyotp.TOTP(totp_secret).now()
                     # Enter the code
@@ -623,9 +622,15 @@ class FidelityAutomation:
                     # Prevent future OTP requirements
                     if save_device:
                         # Check this box
-                        self.page.locator("label").filter(has_text="Don't ask me again on this").check()
-                        if (not self.page.locator("label").filter(has_text="Don't ask me again on this").is_checked()):
-                            raise Exception("Cannot check 'Don't ask me again on this device' box")
+                        remember_device = self.page.locator("label").filter(
+                            has_text=re.compile(
+                                "Don't ask me again on this|Remember this device",
+                                re.IGNORECASE,
+                            )
+                        ).first
+                        remember_device.check()
+                        if not remember_device.is_checked():
+                            raise Exception("Cannot check the remember-device box")
 
                     # Log in with code
                     self.page.get_by_role("button", name="Continue").click()
@@ -642,6 +647,13 @@ class FidelityAutomation:
                     # Got to the summary page, return True
                     return (True, True)
 
+                # Use the authenticator prompt directly when Fidelity selected
+                # it as the account's primary MFA method.
+                if (totp_secret is not None and
+                    self.page.get_by_role("heading", name="Enter the code from your").is_visible()
+                ):
+                    return submit_authenticator_code()
+
                 # If the authenticator code is the only way but we don't have the secret, return error
                 if self.page.get_by_text(
                     "Enter the code from your authenticator app This security code will confirm the"
@@ -653,12 +665,37 @@ class FidelityAutomation:
                 # If the app push notification page is present
                 if self.page.get_by_role("link", name="Try another way").is_visible():
                     if save_device:
-                        self.page.locator("label").filter(has_text="Don't ask me again on this").check()
-                        if (not self.page.locator("label").filter(has_text="Don't ask me again on this").is_checked()):
-                            raise Exception("Cannot check 'Don't ask me again on this device' box")
+                        remember_device = self.page.locator("label").filter(
+                            has_text=re.compile(
+                                "Don't ask me again on this|Remember this device",
+                                re.IGNORECASE,
+                            )
+                        ).first
+                        remember_device.check()
+                        if not remember_device.is_checked():
+                            raise Exception("Cannot check the remember-device box")
 
                     # Click on alternate verification method to get OTP via text
                     self.page.get_by_role("link", name="Try another way").click()
+                    self.wait_for_loading_sign()
+
+                    # Mobile-app push can remain Fidelity's preferred method
+                    # even after a TOTP authenticator is enrolled. Explicitly
+                    # select the authenticator option instead of falling
+                    # through to SMS when rlean supplied its secret.
+                    if totp_secret is not None:
+                        authenticator = self.page.get_by_role(
+                            "button", name=re.compile("authenticator", re.IGNORECASE)
+                        )
+                        if not authenticator.is_visible():
+                            authenticator = self.page.get_by_role(
+                                "link", name=re.compile("authenticator", re.IGNORECASE)
+                            )
+                        authenticator.first.click()
+                        self.page.get_by_placeholder("XXXXXX").wait_for(
+                            timeout=10000, state="visible"
+                        )
+                        return submit_authenticator_code()
 
                 # Press the Text me button
                 self.page.get_by_role("button", name="Text me the code").click()
